@@ -4,9 +4,11 @@
 # scan every host in scannow.txt & place info in now.txt
 # scan every in updateinfo.txt & place in update.txt
 
+source ./utils.sh
+
 FILE_SCANNOW=
 FILE_SCANNOW_RESULTS=
-VERBOSE=
+VERBOSE=1
 DEFAULT_HEADER=$(perl -e 'print "="x64 . "VVVV" . "="x64')
 DEFAULT_FOOTER=$(perl -e 'print "="x64 . "XXXX" . "="x64')
 DEFAULT_SEP=$(perl -e 'print "="x40')
@@ -17,52 +19,44 @@ function myprint(){
   fi
 }
 
-function valid_ip(){
-  local ip=$1
-  local stat=1
-
-  if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    OIFS=$IFS
-    IFS='.'
-    ip=($ip)
-    IFS=$OIFS
-    [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
-        && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
-    stat=$?
+function check_dependencies(){
+  local check_name="nmap check"
+  local nmap_path=`which nmap`
+  local checkdep_res=
+  if [ -z $nmap_path ]; then
+    checkdep_res="Error: no nmap binary found"
+  else
+    checkdep_res="nmap found: $nmap_path"
   fi
-  return $stat
-}
+  write_portion "$check_name $checkdep_res" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
 
-function get_hostname(){
-  return `dig +short -x $1`
-}
-
-function write_portion(){
-  local message="$1"
-  local file="$2"
-
-  if [ ! -f $file ]; then
-    echo "No found $file !!!"; exit 1
+  check_name="proxychains4 check"
+  local proxychains_path=`which proxychains4`
+  if [ -z $proxychains_path ]; then
+    checkdep_res="Error: no proxychains4 binary found"
+  else
+    checkdep_res="proxychains4 found: $proxychains_path"
   fi
-
-  local header="$3"
-  local footer="$4"
-
-  echo $header >> $file
-  echo $message >> $file
-  echo $footer >> $file
-  echo >> $file
+  write_portion "$check_name $checkdep_res" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
 }
 
 function scan0(){
   local h=$1
   local ip=$2
-  local scan_name="scan 0"
+  local scan_name="nmap 65535 paranoid"
   local scan_dt=$(date '+%d/%m/%Y %H:%M:%S')
 
-  write_portion "  $scan_dt $scan_name $h ($i)" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
+  local nmap_binary=`which nmap`
+  local proxychains_binary=`which proxychains4`
+  local tempfile=`create_random_file scan`
+  local nmap_params="-p80 -sV -T2 -v4 -oN $tempfile"
 
+  $proxychains_binary $nmap_binary $ip $nmap_params 1>/dev/null 2>/dev/null
+  write_portion "  $scan_dt start  [$scan_name] $h ($ip)" $FILE_SCANNOW_RESULTS $(perl -e 'print "-"x16') $(perl -e 'print "-"x16')
+  cat $tempfile >> $FILE_SCANNOW_RESULTS
+  write_portion "  $scan_dt finish [$scan_name]" $FILE_SCANNOW_RESULTS $(perl -e 'print "-"x16') $(perl -e 'print "-"x16')
 
+  rm -f $tempfile
 }
 
 function scan1(){
@@ -71,7 +65,7 @@ function scan1(){
   local scan_name="scan 1"
   local scan_dt=$(date '+%d/%m/%Y %H:%M:%S')
 
-  write_portion "  $scan_dt $scan_name $h ($i)" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
+  write_portion "  $scan_dt $scan_name $h ($ip)" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
 }
 
 function scan2(){
@@ -80,7 +74,7 @@ function scan2(){
   local scan_name="scan 2"
   local scan_dt=$(date '+%d/%m/%Y %H:%M:%S')
 
-  write_portion "  $scan_dt $scan_name $h ($i)" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
+  write_portion "  $scan_dt $scan_name $h ($ip)" $FILE_SCANNOW_RESULTS $DEFAULT_SEP $DEFAULT_SEP
 }
 
 function scan_host(){
@@ -96,7 +90,7 @@ function scan_host(){
     HOST=$1
     IP=`host $HOST | grep -i "has address" | cut -d ' ' -f4`
   fi
-  
+
   write_portion "  Analyze $HOST ($IP)" $FILE_SCANNOW_RESULTS $DEFAULT_HEADER $DEFAULT_SEP
   scan0 $HOST $IP
   scan1 $HOST $IP
@@ -104,16 +98,6 @@ function scan_host(){
 
   write_portion '' $FILE_SCANNOW_RESULTS '' $DEFAULT_FOOTER
 
-}
-
-function create_random_file(){
-  local random_name=$(cat /dev/urandom | tr -dc '0-9a-zA-Z' | fold -w 256 | head -n 1 | head --bytes 8)
-  local file=/tmp/test # $random_name
-  if [ -f $file ]; then
-    rm -f $file
-  fi
-  touch $file
-  echo $file
 }
 
 function scannow(){
@@ -133,11 +117,12 @@ function scannow(){
   fi
 
   if [[ -z $file_results || ! -f $file_results ]]; then
-    file_results=$(create_random_file)
+    file_results=$(create_random_file results)
     FILE_SCANNOW_RESULTS=$file_results
     myprint "File $file_results not found. Set to $FILE_SCANNOW_RESULTS"
   fi
 
+  myprint "  --> $FILE_SCANNOW_RESULTS ..."
   for host in `cat $FILE_SCANNOW`; do
     scan_host $host
   done;
